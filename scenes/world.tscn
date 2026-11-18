@@ -1,0 +1,42 @@
+[gd_scene format=3 uid="uid://x64yqrf6cd53"]
+
+[ext_resource type="Script" uid="uid://c861lyippgxro" path="res://scripts/terrain.gd" id="1_rwgxs"]
+[ext_resource type="PackedScene" uid="uid://ddwona4mlmldr" path="res://scenes/jet.tscn" id="2_4wyf3"]
+[ext_resource type="PackedScene" uid="uid://ciiah47bebw7e" path="res://scenes/tank.tscn" id="2_k0juu"]
+[ext_resource type="PackedScene" uid="uid://cxral7ge8h6m5" path="res://scenes/sam_turret.tscn" id="3_71j4m"]
+[ext_resource type="Script" uid="uid://cl62s6fftkwny" path="res://scripts/targeting_hud.gd" id="4_k0juu"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_rwgxs"]
+sky_top_color = Color(0.49945927, 0.5977526, 0.7605151, 1)
+
+[sub_resource type="Sky" id="Sky_nnsk1"]
+sky_material = SubResource("ProceduralSkyMaterial_rwgxs")
+
+[sub_resource type="Environment" id="Environment_rwgxs"]
+background_mode = 2
+sky = SubResource("Sky_nnsk1")
+glow_enabled = true
+fog_enabled = true
+fog_density = 0.0025
+
+[node name="world" type="Node3D" unique_id=376325337]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1103532938]
+environment = SubResource("Environment_rwgxs")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=511724883]
+transform = Transform3D(-0.8660254, -0.3535534, 0.3535534, 0, 0.70710677, 0.70710677, -0.50000006, 0.6123724, -0.6123724, 0, 0, 0)
+shadow_enabled = true
+
+[node name="terrain" type="Node3D" parent="." unique_id=601687574 node_paths=PackedStringArray("target_jet")]
+script = ExtResource("1_rwgxs")
+target_jet = NodePath("../jet")
+target_scene = ExtResource("2_k0juu")
+sam_turret_scene = ExtResource("3_71j4m")
+height_multiplier = 14.0
+
+[node name="jet" parent="." unique_id=610851106 instance=ExtResource("2_4wyf3")]
+
+[node name="targeting_HUD" type="CanvasLayer" parent="." unique_id=1301919259 node_paths=PackedStringArray("jet")]
+script = ExtResource("4_k0juu")
+jet = NodePath("../jet")

@@ -1,0 +1,598 @@
+[gd_scene format=3 uid="uid://8kh51ci7d3ae"]
+
+[sub_resource type="GDScript" id="GDScript_sgp6g"]
+script/source = "extends Control
+
+# --- RENDERER SETTINGS ---
+const RES_W := 320
+const RES_H := 180
+const BYTES_PER_PIXEL := 4
+const FRAME_BYTES := RES_W * RES_H * BYTES_PER_PIXEL
+const WORLD_SIZE := 64
+const ANGLE_STEPS := 64 # 5.625 degrees per cached rotation step
+
+var frame_buf := PackedByteArray()
+var sky_buf := PackedByteArray()
+var display_tex: ImageTexture
+var screen_rect: TextureRect
+var perf_label: Label
+
+# --- CAMERA STATE ---
+enum CamMode { TOP_DOWN, ISOMETRIC, THIRD_PERSON }
+var current_mode := CamMode.ISOMETRIC
+
+var cam_pos := Vector3(32.0, 32.0, 0.0)
+var cam_yaw := 0.785
+var cam_pitch := 0.85
+var cam_zoom := 6.5
+var cam_focal := 220.0
+
+var target_yaw := 0.785
+var target_pitch := 0.85
+var target_zoom := 6.5
+var target_focal := 220.0
+
+# --- WORLD & ENTITY DATA ---
+var terrain_height := PackedFloat32Array()
+var terrain_top_rgba := PackedInt32Array()
+var terrain_side_rgba := PackedInt32Array()
+
+var player_pos := Vector3(32.0, 32.0, 0.0)
+var player_rot := 0.0
+
+# Cached Sprite Stacks:
+# Array[angle_idx] -> Array[slice_idx] -> { \"w\": int, \"h\": int, \"pixels\": PackedInt32Array }
+var player_cache: Array = []
+var tree_cache: Array = []
+var cloud_cache: Array = []
+
+var trees: Array[Vector3] = []
+var clouds: Array[Vector3] = []
+var noise := FastNoiseLite.new()
+
+# Reusable sorting buffers to avoid per-frame allocations
+var draw_types := PackedByteArray()
+var draw_depths := PackedFloat32Array()
+var draw_data_idx := PackedInt32Array()
+var draw_order := PackedInt32Array()
+
+# Entity render queue buffers
+var stack_positions: Array[Vector3] = []
+var stack_rots := PackedFloat32Array()
+var stack_scales := PackedFloat32Array()
+var stack_cache_ids := PackedByteArray() # 0 = player, 1 = tree, 2 = cloud
+
+
+func _ready() -> void:
+	# 1. Allocate raw byte buffers
+	frame_buf.resize(FRAME_BYTES)
+	sky_buf.resize(FRAME_BYTES)
+	
+	# Pre-bake sky color into sky_buf for instant memcpy-style clear
+	var sky_col := Color(\"#5b8ee6\")
+	var r := int(sky_col.r * 255.0)
+	var g := int(sky_col.g * 255.0)
+	var b := int(sky_col.b * 255.0)
+	for i in range(0, FRAME_BYTES, 4):
+		sky_buf[i] = r
+		sky_buf[i + 1] = g
+		sky_buf[i + 2] = b
+		sky_buf[i + 3] = 255
+	
+	var init_img := Image.create_from_data(RES_W, RES_H, false, Image.FORMAT_RGBA8, sky_buf)
+	display_tex = ImageTexture.create_from_image(init_img)
+	
+	screen_rect = TextureRect.new()
+	screen_rect.texture = display_tex
+	screen_rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	screen_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	screen_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(screen_rect)
+	
+	perf_label = Label.new()
+	perf_label.position = Vector2(8, 8)
+	perf_label.add_theme_color_override(\"font_shadow_color\", Color.BLACK)
+	perf_label.add_theme_constant_override(\"shadow_offset_x\", 1)
+	perf_label.add_theme_constant_override(\"shadow_offset_y\", 1)
+	add_child(perf_label)
+	
+	# 2. Generate world and pre-bake rotated sprite caches
+	_generate_world()
+	_bake_all_sprite_caches()
+	_set_camera_mode(CamMode.ISOMETRIC)
+
+
+func _process(delta: float) -> void:
+	_handle_input(delta)
+	_update_camera(delta)
+	_update_clouds(delta)
+	_render_frame()
+	perf_label.text = \"FPS: %d | 320x180 Software Buffer\" % Engine.get_frames_per_second()
+
+
+# ==============================================================================
+# 1. INPUT & SMOOTH CAMERA TRANSITIONS
+# ==============================================================================
+func _handle_input(delta: float) -> void:
+	if Input.is_key_pressed(KEY_1): _set_camera_mode(CamMode.TOP_DOWN)
+	if Input.is_key_pressed(KEY_2): _set_camera_mode(CamMode.ISOMETRIC)
+	if Input.is_key_pressed(KEY_3): _set_camera_mode(CamMode.THIRD_PERSON)
+	
+	if Input.is_key_pressed(KEY_Q): target_yaw -= 2.0 * delta
+	if Input.is_key_pressed(KEY_E): target_yaw += 2.0 * delta
+	
+	var move_input := Vector2.ZERO
+	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP): move_input.y -= 1.0
+	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN): move_input.y += 1.0
+	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT): move_input.x -= 1.0
+	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): move_input.x += 1.0
+	
+	if move_input.length_squared() > 0.0:
+		move_input = move_input.normalized().rotated(cam_yaw)
+		player_pos.x = clampf(player_pos.x + move_input.x * 12.0 * delta, 2.0, WORLD_SIZE - 3.0)
+		player_pos.y = clampf(player_pos.y + move_input.y * 12.0 * delta, 2.0, WORLD_SIZE - 3.0)
+		player_rot = lerp_angle(player_rot, move_input.angle() + PI * 0.5, 10.0 * delta)
+		if current_mode == CamMode.THIRD_PERSON:
+			target_yaw = player_rot
+	
+	player_pos.z = _get_terrain_z(player_pos.x, player_pos.y)
+
+
+func _set_camera_mode(mode: CamMode) -> void:
+	current_mode = mode
+	match mode:
+		CamMode.TOP_DOWN:
+			target_pitch = 1.56
+			target_zoom = 7.0
+			target_focal = 1000.0
+		CamMode.ISOMETRIC:
+			target_yaw = round(cam_yaw / (PI * 0.25)) * (PI * 0.25)
+			if is_equal_approx(fmod(absf(target_yaw), PI * 0.5), 0.0):
+				target_yaw += PI * 0.25
+			target_pitch = 0.78
+			target_zoom = 6.5
+			target_focal = 450.0
+		CamMode.THIRD_PERSON:
+			target_yaw = player_rot
+			target_pitch = 0.32
+			target_zoom = 11.0
+			target_focal = 120.0
+
+
+func _update_camera(delta: float) -> void:
+	var t := 1.0 - exp(-5.0 * delta)
+	cam_pos = cam_pos.lerp(player_pos + Vector3(0, 0, 1.5), t)
+	cam_yaw = lerp_angle(cam_yaw, target_yaw, t)
+	cam_pitch = lerpf(cam_pitch, target_pitch, t)
+	cam_zoom = lerpf(cam_zoom, target_zoom, t)
+	cam_focal = lerpf(cam_focal, target_focal, t)
+
+
+func _update_clouds(delta: float) -> void:
+	for i in clouds.size():
+		clouds[i].x += 1.2 * delta
+		if clouds[i].x > WORLD_SIZE + 8.0:
+			clouds[i].x = -8.0
+
+
+# ==============================================================================
+# 2. PACKEDBYTEARRAY SOFTWARE RENDERER
+# ==============================================================================
+func _render_frame() -> void:
+	# Instant full-buffer sky clear (C++ memcpy under the hood)
+	frame_buf = sky_buf.duplicate()
+	
+	var sin_y := sin(cam_yaw)
+	var cos_y := cos(cam_yaw)
+	var sin_p := sin(cam_pitch)
+	var cos_p := cos(cam_pitch)
+	var pitch_squash := maxf(0.18, sin_p)
+	
+	draw_types.clear()
+	draw_depths.clear()
+	draw_data_idx.clear()
+	
+	stack_positions.clear()
+	stack_rots.clear()
+	stack_scales.clear()
+	stack_cache_ids.clear()
+	
+	var min_depth := -cam_focal * 0.7
+	var view_radius := 26
+	var min_x := maxi(0, int(cam_pos.x) - view_radius)
+	var max_x := mini(WORLD_SIZE - 1, int(cam_pos.x) + view_radius)
+	var min_y := maxi(0, int(cam_pos.y) - view_radius)
+	var max_y := mini(WORLD_SIZE - 1, int(cam_pos.y) + view_radius)
+	
+	# A. Queue Visible Terrain Cells
+	for y in range(min_y, max_y + 1):
+		var row_offset := y * WORLD_SIZE
+		var ry_base := (float(y) + 0.5 - cam_pos.y) * cos_y
+		for x in range(min_x, max_x + 1):
+			var idx := row_offset + x
+			var h := terrain_height[idx]
+			var rel_x := float(x) + 0.5 - cam_pos.x
+			var rel_z := h * 0.5 - cam_pos.z
+			var ry := rel_x * sin_y + ry_base
+			var depth := ry * cos_p - rel_z * sin_p
+			if depth > min_depth:
+				draw_types.append(0)
+				draw_depths.append(depth)
+				draw_data_idx.append(idx)
+	
+	# B. Queue Trees
+	for tree_pos in trees:
+		if absf(tree_pos.x - cam_pos.x) < view_radius and absf(tree_pos.y - cam_pos.y) < view_radius:
+			var depth := _calc_depth(tree_pos, sin_y, cos_y, sin_p, cos_p)
+			if depth > min_depth:
+				_queue_stack(tree_pos, 0.0, 0.35, 1, depth)
+	
+	# C. Queue Player
+	_queue_stack(player_pos, player_rot, 0.32, 0, _calc_depth(player_pos, sin_y, cos_y, sin_p, cos_p))
+	
+	# D. Queue Clouds
+	for c_pos in clouds:
+		var depth := _calc_depth(c_pos, sin_y, cos_y, sin_p, cos_p)
+		if depth > min_depth:
+			_queue_stack(c_pos, 0.0, 0.65, 2, depth)
+	
+	# Sort indices back-to-front
+	var count := draw_types.size()
+	draw_order.resize(count)
+	for i in count:
+		draw_order[i] = i
+	
+	# Fast insertion/shell sort on small/nearly-sorted primitive lists
+	_sort_draw_order(count)
+	
+	# Rasterize into PackedByteArray
+	for i in count:
+		var item_idx := draw_order[i]
+		var data_idx := draw_data_idx[item_idx]
+		if draw_types[item_idx] == 0:
+			_draw_terrain_cell_fast(data_idx, sin_y, cos_y, sin_p, cos_p)
+		else:
+			var cache_id := stack_cache_ids[data_idx]
+			var cache := player_cache if cache_id == 0 else (tree_cache if cache_id == 1 else cloud_cache)
+			_draw_cached_stack(
+				stack_positions[data_idx],
+				stack_rots[data_idx],
+				cache,
+				stack_scales[data_idx],
+				sin_y, cos_y, sin_p, cos_p, pitch_squash
+			)
+	
+	# Single upload to GPU texture
+	var out_img := Image.create_from_data(RES_W, RES_H, false, Image.FORMAT_RGBA8, frame_buf)
+	display_tex.update(out_img)
+
+
+func _queue_stack(pos: Vector3, rot: float, scale: float, cache_id: int, depth: float) -> void:
+	var idx := stack_positions.size()
+	stack_positions.append(pos)
+	stack_rots.append(rot)
+	stack_scales.append(scale)
+	stack_cache_ids.append(cache_id)
+	draw_types.append(1)
+	draw_depths.append(depth)
+	draw_data_idx.append(idx)
+
+
+func _sort_draw_order(n: int) -> void:
+	# Shell sort using Ciura gap sequence - fast in pure GDScript with zero allocations
+	var gaps := [701, 301, 132, 57, 23, 10, 4, 1]
+	for gap in gaps:
+		if gap >= n:
+			continue
+		for i in range(gap, n):
+			var temp_idx := draw_order[i]
+			var temp_depth := draw_depths[temp_idx]
+			var j := i
+			while j >= gap and draw_depths[draw_order[j - gap]] < temp_depth:
+				draw_order[j] = draw_order[j - gap]
+				j -= gap
+			draw_order[j] = temp_idx
+
+
+func _calc_depth(world_pos: Vector3, sin_y: float, cos_y: float, sin_p: float, cos_p: float) -> float:
+	var rel := world_pos - cam_pos
+	var ry := rel.x * sin_y + rel.y * cos_y
+	return ry * cos_p - rel.z * sin_p
+
+
+func _draw_terrain_cell_fast(cell_idx: int, sin_y: float, cos_y: float, sin_p: float, cos_p: float) -> void:
+	var wx := float(cell_idx % WORLD_SIZE) + 0.5 - cam_pos.x
+	var wy := float(cell_idx / WORLD_SIZE) + 0.5 - cam_pos.y
+	var wz_top := terrain_height[cell_idx] - cam_pos.z
+	var wz_bot := -2.0 - cam_pos.z
+	
+	var rx := wx * cos_y - wy * sin_y
+	var ry := wx * sin_y + wy * cos_y
+	
+	var depth_top := ry * cos_p - wz_top * sin_p
+	var persp_top := cam_focal / maxf(10.0, cam_focal + depth_top)
+	var sx := RES_W * 0.5 + rx * cam_zoom * persp_top
+	var sy_top := RES_H * 0.55 - (ry * sin_p + wz_top * cos_p) * cam_zoom * persp_top
+	
+	var depth_bot := ry * cos_p - wz_bot * sin_p
+	var persp_bot := cam_focal / maxf(10.0, cam_focal + depth_bot)
+	var sy_bot := RES_H * 0.55 - (ry * sin_p + wz_bot * cos_p) * cam_zoom * persp_bot
+	
+	var size := int(ceil(cam_zoom * persp_top * 1.35))
+	var half := size >> 1
+	var x0 := int(sx) - half
+	var y0 := int(sy_top) - half
+	var y_end := int(sy_bot) + half
+	
+	if y_end > y0 + size:
+		_fill_rect_bytes(x0, y0 + size, size, y_end - (y0 + size), terrain_side_rgba[cell_idx])
+	
+	_fill_rect_bytes(x0, y0, size, size, terrain_top_rgba[cell_idx])
+
+
+func _draw_cached_stack(pos: Vector3, rot: float, cache: Array, scale: float, sin_y: float, cos_y: float, sin_p: float, cos_p: float, pitch_squash: float) -> void:
+	# Map continuous relative angle to nearest pre-baked rotation bucket
+	var rel_angle := fposmod(rot - cam_yaw, TAU)
+	var angle_idx := int(round((rel_angle / TAU) * ANGLE_STEPS)) % ANGLE_STEPS
+	var rotated_slices: Array = cache[angle_idx]
+	
+	var rel_x := pos.x - cam_pos.x
+	var rel_y := pos.y - cam_pos.y
+	var rx := rel_x * cos_y - rel_y * sin_y
+	var ry := rel_x * sin_y + rel_y * cos_y
+	var base_depth := ry * cos_p
+	var base_sy3d := ry * sin_p
+	
+	for i in rotated_slices.size():
+		var slice_data: Dictionary = rotated_slices[i]
+		var sw: int = slice_data[\"w\"]
+		var sh: int = slice_data[\"h\"]
+		var pixels: PackedInt32Array = slice_data[\"pixels\"]
+		
+		var rel_z := (pos.z + float(i) * scale) - cam_pos.z
+		var depth := base_depth - rel_z * sin_p
+		var persp := cam_focal / maxf(10.0, cam_focal + depth)
+		var px_scale := cam_zoom * persp * scale
+		if px_scale <= 0.15:
+			continue
+		
+		var cx := RES_W * 0.5 + rx * cam_zoom * persp
+		var cy := RES_H * 0.55 - (base_sy3d + rel_z * cos_p) * cam_zoom * persp
+		
+		var draw_w := int(round(sw * px_scale))
+		var draw_h := int(round(sh * px_scale * pitch_squash))
+		if draw_w <= 0 or draw_h <= 0:
+			continue
+		
+		var x0 := int(cx) - (draw_w >> 1)
+		var y0 := int(cy) - (draw_h >> 1)
+		
+		# Clip against screen bounds
+		var clip_x0 := maxi(0, x0)
+		var clip_y0 := maxi(0, y0)
+		var clip_x1 := mini(RES_W, x0 + draw_w)
+		var clip_y1 := mini(RES_H, y0 + draw_h)
+		if clip_x1 <= clip_x0 or clip_y1 <= clip_y0:
+			continue
+		
+		var inv_scale_x := float(sw) / float(draw_w)
+		var inv_scale_y := float(sh) / float(draw_h)
+		
+		# Precompute X source indices for the scanline
+		var span_w := clip_x1 - clip_x0
+		var u_lookup := PackedInt32Array()
+		u_lookup.resize(span_w)
+		for sx_off in span_w:
+			u_lookup[sx_off] = int(float((clip_x0 + sx_off) - x0) * inv_scale_x)
+		
+		# Scanline blit directly into frame_buf
+		for sy in range(clip_y0, clip_y1):
+			var v := int(float(sy - y0) * inv_scale_y)
+			var src_row := v * sw
+			var dst_byte_idx := (sy * RES_W + clip_x0) * 4
+			for sx_off in span_w:
+				var rgba32 := pixels[src_row + u_lookup[sx_off]]
+				if rgba32 != 0: # 0 = transparent pixel
+					frame_buf.encode_u32(dst_byte_idx, rgba32)
+				dst_byte_idx += 4
+
+
+func _fill_rect_bytes(x: int, y: int, w: int, h: int, rgba32: int) -> void:
+	var x0 := maxi(0, x)
+	var y0 := maxi(0, y)
+	var x1 := mini(RES_W, x + w)
+	var y1 := mini(RES_H, y + h)
+	if x1 <= x0 or y1 <= y0:
+		return
+	
+	# Build a single horizontal scanline template once, then stamp it down rows
+	var span_w := x1 - x0
+	var row_bytes := PackedByteArray()
+	row_bytes.resize(span_w * 4)
+	for i in span_w:
+		row_bytes.encode_u32(i * 4, rgba32)
+	
+	var span_byte_len := span_w * 4
+	for py in range(y0, y1):
+		var dst := (py * RES_W + x0) * 4
+		for b in span_byte_len:
+			frame_buf[dst + b] = row_bytes[b]
+
+
+func _pack_rgba32(col: Color) -> int:
+	var r := clampi(int(round(col.r * 255.0)), 0, 255)
+	var g := clampi(int(round(col.g * 255.0)), 0, 255)
+	var b := clampi(int(round(col.b * 255.0)), 0, 255)
+	var a := clampi(int(round(col.a * 255.0)), 0, 255)
+	return r | (g << 8) | (b << 16) | (a << 24)
+
+
+# ==============================================================================
+# 3. PROCEDURAL WORLD & PRE-ROTATED SLICE CACHE BAKER
+# ==============================================================================
+func _generate_world() -> void:
+	noise.seed = randi()
+	noise.frequency = 0.045
+	var total := WORLD_SIZE * WORLD_SIZE
+	terrain_height.resize(total)
+	terrain_top_rgba.resize(total)
+	terrain_side_rgba.resize(total)
+	
+	for y in WORLD_SIZE:
+		for x in WORLD_SIZE:
+			var n := noise.get_noise_2d(x, y)
+			var idx := y * WORLD_SIZE + x
+			var col: Color
+			if n < -0.15:
+				terrain_height[idx] = -0.3
+				col = Color(\"#3b7dd8\")
+			elif n < -0.05:
+				terrain_height[idx] = 0.0
+				col = Color(\"#e6d595\")
+			elif n < 0.28:
+				terrain_height[idx] = floor((n + 0.05) * 8.0) * 0.4
+				col = Color(\"#58a84c\") if (x + y) % 2 == 0 else Color(\"#4f9c44\")
+			else:
+				terrain_height[idx] = floor((n + 0.05) * 10.0) * 0.45
+				col = Color(\"#8c8c96\")
+			
+			terrain_top_rgba[idx] = _pack_rgba32(col)
+			terrain_side_rgba[idx] = _pack_rgba32(col.darkened(0.32))
+	
+	for i in 45:
+		var tx := randf_range(4.0, WORLD_SIZE - 4.0)
+		var ty := randf_range(4.0, WORLD_SIZE - 4.0)
+		var tz := _get_terrain_z(tx, ty)
+		if tz > 0.1 and tz < 1.8:
+			trees.append(Vector3(tx, ty, tz))
+	
+	for i in 12:
+		clouds.append(Vector3(
+			randf_range(0.0, WORLD_SIZE),
+			randf_range(0.0, WORLD_SIZE),
+			randf_range(7.5, 10.5)
+		))
+
+
+func _get_terrain_z(x: float, y: float) -> float:
+	var ix := clampi(int(round(x)), 0, WORLD_SIZE - 1)
+	var iy := clampi(int(round(y)), 0, WORLD_SIZE - 1)
+	return maxf(0.0, terrain_height[iy * WORLD_SIZE + ix])
+
+
+func _bake_all_sprite_caches() -> void:
+	var p_raw: Array[Image] = []
+	for z in 8:
+		var img := Image.create(12, 14, false, Image.FORMAT_RGBA8)
+		for y in 14:
+			for x in 12:
+				var dx := absf(x - 5.5)
+				var dy := absf(y - 6.5)
+				if z < 2 and dx < 5.0 and dy < 6.0:
+					img.set_pixel(x, y, Color(\"#2b303a\"))
+				elif z >= 2 and z < 5 and dx < 4.2 and dy < 5.2:
+					img.set_pixel(x, y, Color(\"#d94e34\"))
+				elif z >= 5 and dx < 2.5 and dy < 2.8:
+					img.set_pixel(x, y, Color(\"#f2b63d\"))
+				elif z == 5 and dx < 1.0 and y < 5:
+					img.set_pixel(x, y, Color(\"#d0d5dd\"))
+		p_raw.append(img)
+	player_cache = _bake_rotated_stack(p_raw)
+	
+	var t_raw: Array[Image] = []
+	for z in 12:
+		var img := Image.create(12, 12, false, Image.FORMAT_RGBA8)
+		var radius := 1.5 if z < 3 else (12.0 - z) * 0.55
+		var col := Color(\"#6b442a\") if z < 3 else (Color(\"#2d6e32\") if z % 2 == 0 else Color(\"#3b8540\"))
+		for y in 12:
+			for x in 12:
+				if Vector2(x - 5.5, y - 5.5).length() <= radius:
+					img.set_pixel(x, y, col)
+		t_raw.append(img)
+	tree_cache = _bake_rotated_stack(t_raw)
+	
+	var c_raw: Array[Image] = []
+	var cloud_noise := FastNoiseLite.new()
+	cloud_noise.seed = randi()
+	cloud_noise.frequency = 0.22
+	for z in 5:
+		var img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
+		var layer_falloff := 1.0 - absf(z - 2.0) * 0.28
+		for y in 16:
+			for x in 16:
+				var dist := Vector2(x - 7.5, y - 7.5).length() / 7.5
+				var n := (cloud_noise.get_noise_2d(x, y) + 1.0) * 0.5
+				if dist < layer_falloff * (0.65 + n * 0.45):
+					var c := Color(\"#ffffff\") if z >= 2 else Color(\"#cbd8eb\")
+					img.set_pixel(x, y, c)
+		c_raw.append(img)
+	cloud_cache = _bake_rotated_stack(c_raw)
+
+
+func _bake_rotated_stack(raw_slices: Array[Image]) -> Array:
+	var cache := []
+	cache.resize(ANGLE_STEPS)
+	var slice_count := raw_slices.size()
+	
+	for a_idx in ANGLE_STEPS:
+		var angle := (float(a_idx) / float(ANGLE_STEPS)) * TAU
+		var cos_a := cos(angle)
+		var sin_a := sin(angle)
+		var angle_slices := []
+		angle_slices.resize(slice_count)
+		
+		for s_idx in slice_count:
+			var src := raw_slices[s_idx]
+			var sw := src.get_width()
+			var sh := src.get_height()
+			var shade := lerpf(0.75, 1.0, float(s_idx) / maxf(1.0, float(slice_count - 1)))
+			
+			# Expand bounding box so rotated corners never clip
+			var diag := int(ceil(sqrt(float(sw * sw + sh * sh)))) + 2
+			var half_diag := diag * 0.5
+			var half_sw := sw * 0.5
+			var half_sh := sh * 0.5
+			
+			var packed_pixels := PackedInt32Array()
+			packed_pixels.resize(diag * diag)
+			
+			for dy in diag:
+				var oy := float(dy) - half_diag + 0.5
+				for dx in diag:
+					var ox := float(dx) - half_diag + 0.5
+					var u := int(floor(ox * cos_a - oy * sin_a + half_sw))
+					var v := int(floor(ox * sin_a + oy * cos_a + half_sh))
+					if u >= 0 and u < sw and v >= 0 and v < sh:
+						var col := src.get_pixel(u, v)
+						if col.a > 0.5:
+							col.r *= shade
+							col.g *= shade
+							col.b *= shade
+							packed_pixels[dy * diag + dx] = _pack_rgba32(col)
+			
+			angle_slices[s_idx] = {
+				\"w\": diag,
+				\"h\": diag,
+				\"pixels\": packed_pixels
+			}
+		cache[a_idx] = angle_slices
+	return cache
+"
+
+[node name="main" type="Control" unique_id=154240300]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = SubResource("GDScript_sgp6g")
+
+[node name="TextureRect" type="TextureRect" parent="." unique_id=415281636]
+texture_filter = 1
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2

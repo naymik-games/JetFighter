@@ -1,0 +1,18 @@
+[gd_scene format=3 uid="uid://ciiah47bebw7e"]
+
+[ext_resource type="Script" uid="uid://dhc0f8n2poqr8" path="res://scripts/ground_target.gd" id="1_c4xvs"]
+[ext_resource type="PackedScene" uid="uid://gewcp6ts3tss" path="res://assets/Tank by Quaternius - Dc4k4CooN3.glb" id="2_01nm4"]
+[ext_resource type="PackedScene" uid="uid://bwunmydppm3g4" path="res://scenes/explosion_burst.tscn" id="2_k4vtj"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_g3078"]
+size = Vector3(2, 2, 2)
+
+[node name="Tank" type="Area3D" unique_id=680975933]
+script = ExtResource("1_c4xvs")
+explosion_scene = ExtResource("2_k4vtj")
+
+[node name="Root Scene" parent="." unique_id=1420213578 instance=ExtResource("2_01nm4")]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=1275026270]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+shape = SubResource("BoxShape3D_g3078")
