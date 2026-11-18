@@ -27,9 +27,15 @@ var needed_chunks: Dictionary = {}   # { Vector2i: true }
 
 var last_jet_chunk := Vector2i(999999, 999999)
 
+# Debug stats (read by DebugOverlay). Written on the main thread only.
+var last_build_ms := 0.0
+var peak_build_ms := 0.0
+var last_finalize_ms := 0.0
+var peak_finalize_ms := 0.0
+
 
 func _ready() -> void:
-	add_to_group("terrain")
+	add_to_group(GameConst.GROUP_TERRAIN)
 
 	if config == null:
 		config = TerrainConfig.new()
@@ -40,7 +46,7 @@ func _ready() -> void:
 	shared_material.roughness = 0.85
 
 	if not target_jet:
-		target_jet = get_tree().get_first_node_in_group("player")
+		target_jet = get_tree().get_first_node_in_group(GameConst.GROUP_PLAYER)
 
 
 func _process(_delta: float) -> void:
@@ -89,6 +95,7 @@ func _update_chunks(center_chunk: Vector2i) -> void:
 
 # Runs on a background thread. NEVER modify the SceneTree directly here!
 func _build_chunk_threaded(coord: Vector2i) -> void:
+	var t_start := Time.get_ticks_usec()
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	st.set_smooth_group(-1) # Low-poly flat normals
@@ -131,17 +138,21 @@ func _build_chunk_threaded(coord: Vector2i) -> void:
 	var collision_shape: ConcavePolygonShape3D = array_mesh.create_trimesh_shape()
 
 	# Hand the finished resources back to the main thread safely
-	_finalize_chunk_on_main.call_deferred(coord, array_mesh, collision_shape)
+	var build_ms := (Time.get_ticks_usec() - t_start) / 1000.0
+	_finalize_chunk_on_main.call_deferred(coord, array_mesh, collision_shape, build_ms)
 
 
 # Runs safely on the main thread
-func _finalize_chunk_on_main(coord: Vector2i, array_mesh: ArrayMesh, collision_shape: ConcavePolygonShape3D) -> void:
+func _finalize_chunk_on_main(coord: Vector2i, array_mesh: ArrayMesh, collision_shape: ConcavePolygonShape3D, build_ms: float) -> void:
 	pending_chunks.erase(coord)
+	last_build_ms = build_ms
+	peak_build_ms = maxf(peak_build_ms, build_ms)
 
 	# If the jet already flew past this chunk while it was generating, discard it
 	if not needed_chunks.has(coord):
 		return
 
+	var t_start := Time.get_ticks_usec()
 	var world_origin := Vector3(coord.x * config.chunk_size, 0.0, coord.y * config.chunk_size)
 
 	var mesh_instance := MeshInstance3D.new()
@@ -162,6 +173,9 @@ func _finalize_chunk_on_main(coord: Vector2i, array_mesh: ArrayMesh, collision_s
 	_try_spawn(sam_turret_scene, sam_chance, mesh_instance, world_origin)
 
 	active_chunks[coord] = mesh_instance
+
+	last_finalize_ms = (Time.get_ticks_usec() - t_start) / 1000.0
+	peak_finalize_ms = maxf(peak_finalize_ms, last_finalize_ms)
 
 
 # Temporary spawner (replaced by the SpawnPlanner in Phase 3).
@@ -188,6 +202,24 @@ func _try_spawn(scene: PackedScene, chance: float, parent: Node3D, world_origin:
 func _add_vertex(st: SurfaceTool, pos: Vector3) -> void:
 	st.set_color(sampler.color_at_height(pos.y))
 	st.add_vertex(pos)
+
+
+func get_stats() -> Dictionary:
+	return {
+		"seed": sampler.seed_value,
+		"active": active_chunks.size(),
+		"pending": pending_chunks.size(),
+		"needed": needed_chunks.size(),
+		"last_build_ms": last_build_ms,
+		"peak_build_ms": peak_build_ms,
+		"last_finalize_ms": last_finalize_ms,
+		"peak_finalize_ms": peak_finalize_ms,
+	}
+
+
+func reset_peak_stats() -> void:
+	peak_build_ms = 0.0
+	peak_finalize_ms = 0.0
 
 
 func _exit_tree() -> void:

@@ -31,18 +31,18 @@ var alert_blink_timer: float = 0.0
 var sampler: TerrainSampler = null
 
 func _ready() -> void:
-	add_to_group("hud")
+	add_to_group(GameConst.GROUP_HUD)
 	drawer.set_anchors_preset(Control.PRESET_FULL_RECT)
 	drawer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	drawer.draw.connect(_on_draw_hud)
 	add_child(drawer)
 	
 	if not is_instance_valid(jet):
-		jet = get_tree().get_first_node_in_group("player")
+		jet = get_tree().get_first_node_in_group(GameConst.GROUP_PLAYER)
 
 func _get_sea_level() -> float:
 	if sampler == null:
-		var terrain := get_tree().get_first_node_in_group("terrain")
+		var terrain := get_tree().get_first_node_in_group(GameConst.GROUP_TERRAIN)
 		if terrain != null:
 			sampler = terrain.get("sampler") as TerrainSampler
 	return sampler.sea_level if sampler != null else 0.0
@@ -97,7 +97,7 @@ func _update_offscreen_arrows(cam: Camera3D) -> void:
 	var center := viewport_size * 0.5
 	var bounds := Rect2(Vector2(edge_margin, edge_margin), viewport_size - Vector2(edge_margin * 2.0, edge_margin * 2.0))
 	
-	for node in get_tree().get_nodes_in_group("targets"):
+	for node in get_tree().get_nodes_in_group(GameConst.GROUP_TARGETS):
 		if not is_instance_valid(node):
 			continue
 		var tgt := node as Node3D
@@ -135,7 +135,7 @@ func _update_incoming_threats(cam: Camera3D) -> void:
 	var center := viewport_size * 0.5
 	var bounds := Rect2(Vector2(edge_margin, edge_margin), viewport_size - Vector2(edge_margin * 2.0, edge_margin * 2.0))
 	
-	for node in get_tree().get_nodes_in_group("enemy_missiles"):
+	for node in get_tree().get_nodes_in_group(GameConst.GROUP_ENEMY_MISSILES):
 		if not is_instance_valid(node):
 			continue
 		var sam := node as Node3D
