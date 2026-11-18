@@ -3,7 +3,6 @@ extends CanvasLayer
 @export var jet: Node3D # Assign JetFighter in Inspector
 @export_group("Gauges & Limits")
 @export var max_display_altitude: float = 140.0
-@export var sea_level_offset: float = 1.6 # Matches water height in TerrainGenerator (-0.05 * 32)
 @export var edge_margin: float = 46.0
 @export var combo_duration: float = 4.5
 @export var missile_warning_range: float = 240.0
@@ -28,6 +27,9 @@ var alert_blink_timer: float = 0.0
 
 @onready var drawer := Control.new()
 
+# Resolved lazily from the node in group "terrain" so sea level has one source of truth
+var sampler: TerrainSampler = null
+
 func _ready() -> void:
 	add_to_group("hud")
 	drawer.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -37,6 +39,13 @@ func _ready() -> void:
 	
 	if not is_instance_valid(jet):
 		jet = get_tree().get_first_node_in_group("player")
+
+func _get_sea_level() -> float:
+	if sampler == null:
+		var terrain := get_tree().get_first_node_in_group("terrain")
+		if terrain != null:
+			sampler = terrain.get("sampler") as TerrainSampler
+	return sampler.sea_level if sampler != null else 0.0
 
 func add_score(base_points: int) -> void:
 	score += base_points * combo
@@ -189,7 +198,7 @@ func _on_draw_hud() -> void:
 		var max_spd: float = jet.get("boost_speed")
 		var spd_ratio := clampf((cur_spd - min_spd) / maxf(max_spd - min_spd, 1.0), 0.0, 1.0)
 		
-		var alt: float = maxf(jet.global_position.y + sea_level_offset, 0.0)
+		var alt: float = maxf(jet.global_position.y - _get_sea_level(), 0.0)
 		var alt_ratio := clampf(alt / max_display_altitude, 0.0, 1.0)
 		
 		var gauge_h := 190.0
