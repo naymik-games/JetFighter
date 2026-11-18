@@ -1,7 +1,7 @@
 [gd_scene format=4 uid="uid://ddwona4mlmldr"]
 
 [ext_resource type="Script" uid="uid://b3r168h8xsi3i" path="res://scripts/jet.gd" id="1_l0pwp"]
-[ext_resource type="PackedScene" uid="uid://db1jrfhifsuwe" path="res://scenes/missle.tscn" id="2_t5v3o"]
+[ext_resource type="PackedScene" uid="uid://db1jrfhifsuwe" path="res://scenes/player_missle.tscn" id="2_t5v3o"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_4kdhw"]
 resource_name = "455A64"

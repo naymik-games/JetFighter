@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://cxvi1bcjp3i7"]
 
-[ext_resource type="Script" uid="uid://o0xg5mfh4f5w" path="res://scripts/enemy_missle.gd" id="1_ovnd3"]
+[ext_resource type="Script" uid="uid://o0xg5mfh4f5w" path="res://scripts/sam_missle.gd" id="1_ovnd3"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_nu8wd"]
 radius = 0.25
