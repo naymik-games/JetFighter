@@ -91,6 +91,8 @@ func _build_text(delta: float) -> String:
 			s["last_build_ms"], s["peak_build_ms"], s["last_finalize_ms"], s["peak_finalize_ms"]
 		])
 		lines.append("Seed %d" % s["seed"])
+		var sp: Dictionary = s["spawn"]
+		lines.append("Spawns %d queued   %d/%d live   %d destroyed" % [sp["queued"], sp["live"], sp["cap"], sp["destroyed"]])
 	else:
 		lines.append("Terrain: not found")
 

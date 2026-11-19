@@ -1,7 +1,7 @@
 extends CharacterBody3D
 
 @export_group("Flight & Throttle")
-@export var cruise_speed: float = 35.0
+@export var cruise_speed: float = 35.0 #25
 @export var boost_speed: float = 65.0
 @export var brake_speed: float = 18.0
 @export var throttle_accel: float = 4.5
@@ -195,7 +195,7 @@ func add_camera_shake(amount: float) -> void:
 
 func _update_camera(delta: float) -> void:
 	var flat_basis := Basis(Vector3.UP, current_yaw)
-	var offset := flat_basis * Vector3(0.0, 5.5, 11.0)
+	var offset := flat_basis * Vector3(0.0, 5.5, 7.0)
 	var target_pos := global_position + offset
 	
 	camera_arm.global_position = camera_arm.global_position.lerp(target_pos, camera_follow_speed * delta)

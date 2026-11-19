@@ -1,10 +1,11 @@
 extends Node3D
 ## Chunked procedural terrain streaming around the jet.
-## Step 2 of the refactor: all height/color/sea-level data now comes from
-## TerrainSampler. Chunk building and spawning still live here until Phases 2-3.
+## All height/color/sea-level data comes from TerrainSampler. What spawns where
+## is decided by SpawnPlanner and instantiated by SpawnManager (Phase 3).
 
 @export_group("References")
 @export var target_jet: Node3D # Assign your JetFighter node in the Inspector
+# These two scenes are only used to build the default SpawnTable when none is assigned
 @export var target_scene: PackedScene
 @export var sam_turret_scene: PackedScene
 
@@ -12,13 +13,17 @@ extends Node3D
 ## Leave empty to use TerrainConfig defaults.
 @export var config: TerrainConfig
 
-@export_group("Temporary Spawning (moves to a SpawnTable in Phase 3)")
-@export var min_spawn_height: float = 1.0 # Only spawn on land above this height
-@export var target_chance: float = 0.75
-@export var sam_chance: float = 0.35
-@export var spawn_edge_margin: float = 20.0
+@export_group("Spawning")
+## Leave empty to build a default table from target_scene and sam_turret_scene.
+@export var spawn_table: SpawnTable
+## Most spawned entities allowed alive at once. The rest wait in a queue.
+@export var max_live_targets: int = 60
+## Per-frame time budget for instantiating spawned entities.
+@export var spawn_budget_ms: float = 2.0
 
 var sampler: TerrainSampler
+var planner: SpawnPlanner
+var spawn_manager: SpawnManager
 var shared_material := StandardMaterial3D.new()
 
 var active_chunks: Dictionary = {}   # { Vector2i: MeshInstance3D }
@@ -42,11 +47,22 @@ func _ready() -> void:
 	sampler = TerrainSampler.new(config)
 	print("Terrain seed: ", sampler.seed_value)
 
+	if spawn_table == null:
+		spawn_table = SpawnTable.make_default(target_scene, sam_turret_scene)
+	planner = SpawnPlanner.new(spawn_table, sampler)
+
 	shared_material.vertex_color_use_as_albedo = true
 	shared_material.roughness = 0.85
 
 	if not target_jet:
 		target_jet = get_tree().get_first_node_in_group(GameConst.GROUP_PLAYER)
+
+	spawn_manager = SpawnManager.new()
+	spawn_manager.name = "SpawnManager"
+	spawn_manager.max_live_targets = max_live_targets
+	spawn_manager.spawn_budget_ms = spawn_budget_ms
+	spawn_manager.jet = target_jet
+	add_child(spawn_manager)
 
 
 func _process(_delta: float) -> void:
@@ -138,12 +154,15 @@ func _build_chunk_threaded(coord: Vector2i) -> void:
 	var collision_shape: ConcavePolygonShape3D = array_mesh.create_trimesh_shape()
 
 	# Hand the finished resources back to the main thread safely
+	# Decide what spawns on this chunk (pure data, deterministic per chunk)
+	var spawn_plan := planner.plan_chunk(coord)
+
 	var build_ms := (Time.get_ticks_usec() - t_start) / 1000.0
-	_finalize_chunk_on_main.call_deferred(coord, array_mesh, collision_shape, build_ms)
+	_finalize_chunk_on_main.call_deferred(coord, array_mesh, collision_shape, spawn_plan, build_ms)
 
 
 # Runs safely on the main thread
-func _finalize_chunk_on_main(coord: Vector2i, array_mesh: ArrayMesh, collision_shape: ConcavePolygonShape3D, build_ms: float) -> void:
+func _finalize_chunk_on_main(coord: Vector2i, array_mesh: ArrayMesh, collision_shape: ConcavePolygonShape3D, spawn_plan: Array, build_ms: float) -> void:
 	pending_chunks.erase(coord)
 	last_build_ms = build_ms
 	peak_build_ms = maxf(peak_build_ms, build_ms)
@@ -169,34 +188,12 @@ func _finalize_chunk_on_main(coord: Vector2i, array_mesh: ArrayMesh, collision_s
 	add_child(mesh_instance)
 
 	# Children are freed automatically when the chunk unloads
-	_try_spawn(target_scene, target_chance, mesh_instance, world_origin)
-	_try_spawn(sam_turret_scene, sam_chance, mesh_instance, world_origin)
+	spawn_manager.queue_plan(mesh_instance, world_origin, spawn_plan)
 
 	active_chunks[coord] = mesh_instance
 
 	last_finalize_ms = (Time.get_ticks_usec() - t_start) / 1000.0
 	peak_finalize_ms = maxf(peak_finalize_ms, last_finalize_ms)
-
-
-# Temporary spawner (replaced by the SpawnPlanner in Phase 3).
-# FIX: the child position is LOCAL to the chunk mesh, so the chunk origin is
-# subtracted. Previously world coordinates were used as a local position, which
-# shifted targets by the chunk origin again in every chunk except (0, 0).
-func _try_spawn(scene: PackedScene, chance: float, parent: Node3D, world_origin: Vector3) -> void:
-	if scene == null or randf() >= chance:
-		return
-
-	var margin := spawn_edge_margin
-	var local_x := randf_range(margin, config.chunk_size - margin)
-	var local_z := randf_range(margin, config.chunk_size - margin)
-	var ground_y := sampler.height_at(world_origin.x + local_x, world_origin.z + local_z)
-
-	if ground_y <= min_spawn_height: # Only spawn on land, not water
-		return
-
-	var instance := scene.instantiate()
-	instance.position = Vector3(local_x, ground_y, local_z)
-	parent.add_child(instance)
 
 
 func _add_vertex(st: SurfaceTool, pos: Vector3) -> void:
@@ -214,6 +211,7 @@ func get_stats() -> Dictionary:
 		"peak_build_ms": peak_build_ms,
 		"last_finalize_ms": last_finalize_ms,
 		"peak_finalize_ms": peak_finalize_ms,
+		"spawn": spawn_manager.get_stats(),
 	}
 
 
