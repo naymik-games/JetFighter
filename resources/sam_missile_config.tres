@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="MissileConfig" format=3]
+
+[ext_resource type="Script" path="res://scripts/missile_config.gd" id="1_cfg"]
+
+[resource]
+script = ExtResource("1_cfg")
+team = 1
+speed = 54.0
+turn_rate = 1.65
+lifetime = 6.5
+damage = 25
+loses_lock_on_miss = true
+seeker_cone_degrees = 75.0
+lose_lock_range = 260.0
+fly_off_time = 1.5
+smoke_amount = 24
+smoke_lifetime = 0.7
+smoke_puff_radius = 0.4
+smoke_spread = 10.0
+smoke_velocity_min = 2.0
+smoke_velocity_max = 4.0
+smoke_gravity = Vector3(0, -9.8, 0)
+smoke_color_start = Color(1, 0.25, 0.15, 1)
+smoke_color_mid = Color(0.95, 0.45, 0.2, 1)
+smoke_color_end = Color(0.35, 0.32, 0.35, 1)
+smoke_mid_offset = 0.3
+smoke_scale_start = 0.5
+smoke_scale_peak = 1.2
+smoke_scale_peak_time = 0.25

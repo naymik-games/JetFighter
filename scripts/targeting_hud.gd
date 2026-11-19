@@ -1,10 +1,11 @@
 extends CanvasLayer
 
-@export var jet: Node3D # Assign JetFighter in Inspector
+@export var jet: Jet # Assign JetFighter in Inspector
 @export_group("Gauges & Limits")
 @export var max_display_altitude: float = 140.0
 @export var edge_margin: float = 46.0
-@export var combo_duration: float = 4.5
+## Off-screen arrows only show for enemy targets within this distance of the jet.
+@export var arrow_range: float = 450.0
 @export var missile_warning_range: float = 240.0
 
 # Lock-on Reticle State
@@ -13,11 +14,9 @@ var reticle_visible: bool = false
 var is_locked: bool = false
 var lock_ratio: float = 0.0
 
-# Arcade Score & Combo State
-var score: int = 0
+# Score & combo live in ScoreSystem; the HUD only reads them and rolls the display counter.
+var score_system: ScoreSystem = null
 var displayed_score: float = 0.0
-var combo: int = 1
-var combo_timer: float = 0.0
 
 # Off-screen Target Arrows: Array of { "pos": Vector2, "angle": float }
 var offscreen_arrows: Array[Dictionary] = []
@@ -38,7 +37,13 @@ func _ready() -> void:
 	add_child(drawer)
 	
 	if not is_instance_valid(jet):
-		jet = get_tree().get_first_node_in_group(GameConst.GROUP_PLAYER)
+		jet = get_tree().get_first_node_in_group(GameConst.GROUP_PLAYER) as Jet
+	
+	score_system = get_tree().get_first_node_in_group(GameConst.GROUP_SCORE) as ScoreSystem
+	if score_system == null:
+		score_system = ScoreSystem.new()
+		score_system.name = "ScoreSystem"
+		add_child(score_system)
 
 func _get_sea_level() -> float:
 	if sampler == null:
@@ -47,19 +52,10 @@ func _get_sea_level() -> float:
 			sampler = terrain.get("sampler") as TerrainSampler
 	return sampler.sea_level if sampler != null else 0.0
 
-func add_score(base_points: int) -> void:
-	score += base_points * combo
-	combo = min(combo + 1, 8)
-	combo_timer = combo_duration
-
 func _process(delta: float) -> void:
 	# Smoothly roll the score counter upward
+	var score := score_system.score
 	displayed_score = move_toward(displayed_score, float(score), maxf(250.0, abs(score - displayed_score) * 6.0) * delta)
-	
-	if combo > 1:
-		combo_timer -= delta
-		if combo_timer <= 0.0:
-			combo = 1
 			
 	if not is_instance_valid(jet):
 		drawer.queue_redraw()
@@ -70,7 +66,7 @@ func _process(delta: float) -> void:
 		return
 		
 	# 1. Update Active Lock-On Reticle
-	var raw_target = jet.get("current_target")
+	var raw_target = jet.lock_on.target
 	if is_instance_valid(raw_target):
 		var target := raw_target as Node3D
 		if cam.is_position_behind(target.global_position):
@@ -78,7 +74,7 @@ func _process(delta: float) -> void:
 		else:
 			reticle_visible = true
 			reticle_pos = cam.unproject_position(target.global_position)
-			lock_ratio = jet.get("lock_progress")
+			lock_ratio = jet.lock_on.progress
 			is_locked = lock_ratio >= 1.0
 	else:
 		reticle_visible = false
@@ -97,10 +93,10 @@ func _update_offscreen_arrows(cam: Camera3D) -> void:
 	var center := viewport_size * 0.5
 	var bounds := Rect2(Vector2(edge_margin, edge_margin), viewport_size - Vector2(edge_margin * 2.0, edge_margin * 2.0))
 	
-	for node in get_tree().get_nodes_in_group(GameConst.GROUP_TARGETS):
-		if not is_instance_valid(node):
-			continue
-		var tgt := node as Node3D
+	if not is_instance_valid(jet):
+		return
+		
+	for tgt in TargetRegistry.query(jet.global_position, arrow_range, TargetRegistry.MASK_ENEMY):
 		var screen_pos := cam.unproject_position(tgt.global_position)
 		var is_behind := cam.is_position_behind(tgt.global_position)
 		
@@ -184,18 +180,19 @@ func _on_draw_hud() -> void:
 	var score_text := "SCORE  %07d" % int(round(displayed_score))
 	drawer.draw_string(font, Vector2(28, 42), score_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 22, hud_green)
 	
+	var combo := score_system.combo
 	if combo > 1:
 		var combo_col := Color(1.0, 0.82, 0.2, 0.95)
 		drawer.draw_string(font, Vector2(28, 68), "COMBO  x%d" % combo, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, combo_col)
 		# Shrinking combo timer bar
-		var bar_w := 110.0 * clampf(combo_timer / combo_duration, 0.0, 1.0)
+		var bar_w := 110.0 * clampf(score_system.combo_timer / score_system.combo_duration, 0.0, 1.0)
 		drawer.draw_rect(Rect2(28, 76, bar_w, 4), combo_col, true)
 	
 	# --- 3. Speed & Altitude Gauges ---
 	if is_instance_valid(jet):
-		var cur_spd: float = jet.get("current_speed")
-		var min_spd: float = jet.get("brake_speed")
-		var max_spd: float = jet.get("boost_speed")
+		var cur_spd: float = jet.flight.speed
+		var min_spd: float = jet.flight.brake_speed
+		var max_spd: float = jet.flight.boost_speed
 		var spd_ratio := clampf((cur_spd - min_spd) / maxf(max_spd - min_spd, 1.0), 0.0, 1.0)
 		
 		var alt: float = maxf(jet.global_position.y - _get_sea_level(), 0.0)

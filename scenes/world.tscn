@@ -4,6 +4,7 @@
 [ext_resource type="PackedScene" uid="uid://ddwona4mlmldr" path="res://scenes/jet.tscn" id="2_4wyf3"]
 [ext_resource type="PackedScene" uid="uid://ciiah47bebw7e" path="res://scenes/tank.tscn" id="2_k0juu"]
 [ext_resource type="PackedScene" uid="uid://cxral7ge8h6m5" path="res://scenes/sam_turret.tscn" id="3_71j4m"]
+[ext_resource type="Resource" uid="uid://bbfmdipncblj3" path="res://resources/testing_terrain.tres" id="4_i7141"]
 [ext_resource type="Script" uid="uid://cl62s6fftkwny" path="res://scripts/targeting_hud.gd" id="4_k0juu"]
 [ext_resource type="Script" uid="uid://dmvhd12jacpu0" path="res://scripts/debug_overlay.gd" id="6_qfnet"]
 
@@ -34,6 +35,7 @@ script = ExtResource("1_rwgxs")
 target_jet = NodePath("../jet")
 target_scene = ExtResource("2_k0juu")
 sam_turret_scene = ExtResource("3_71j4m")
+config = ExtResource("4_i7141")
 
 [node name="jet" parent="." unique_id=610851106 instance=ExtResource("2_4wyf3")]
 

@@ -92,7 +92,8 @@ func _spawn(job: Dictionary) -> void:
 	# Fires both when destroyed and when the chunk unloads, so the live count stays correct
 	instance.tree_exited.connect(_on_instance_exited)
 
-	var target := instance as GroundTarget
+	# Only Targets report destruction; scenery spawned by other rules is skipped.
+	var target := instance as Target
 	if target != null:
 		target.destroyed.connect(_on_target_destroyed.bind(point.id))
 

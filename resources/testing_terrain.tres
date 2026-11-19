@@ -1,0 +1,8 @@
+[gd_resource type="Resource" script_class="TerrainConfig" format=3 uid="uid://bbfmdipncblj3"]
+
+[ext_resource type="Script" uid="uid://bluiqx6x6d74f" path="res://scripts/terrain_config.gd" id="1_k6cbr"]
+
+[resource]
+script = ExtResource("1_k6cbr")
+height_multiplier = 25.0
+metadata/_custom_type_script = "uid://bluiqx6x6d74f"
