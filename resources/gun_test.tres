@@ -1,0 +1,8 @@
+[gd_resource type="Resource" script_class="GunConfig" format=3 uid="uid://bcq1nc2bpw5xa"]
+
+[ext_resource type="Script" uid="uid://65sagyhr6c1j" path="res://scripts/gun_config.gd" id="1_rknop"]
+
+[resource]
+script = ExtResource("1_rknop")
+heat_per_shot = 0.025
+metadata/_custom_type_script = "uid://65sagyhr6c1j"

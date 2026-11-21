@@ -10,6 +10,7 @@ const GROUP_ENEMY_MISSILES := "enemy_missiles"
 const GROUP_HUD := "hud"
 const GROUP_TERRAIN := "terrain"
 const GROUP_SCORE := "score_system"
+const GROUP_MISSION := "mission"
 
 # --- 3D physics layers (bit values) ---------------------------------------
 # Name these in Project Settings > General > Layer Names > 3D Physics:

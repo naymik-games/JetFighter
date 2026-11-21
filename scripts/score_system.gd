@@ -12,6 +12,10 @@ signal score_changed(score: int, combo: int)
 var score: int = 0
 var combo: int = 1
 var combo_timer: float = 0.0
+## Points from everything that is NOT a mission objective (combo included; penalties subtract).
+## The mission's final score uses this for its "side targets" line, so objectives are not
+## counted twice.
+var side_points: int = 0
 
 
 func _ready() -> void:
@@ -35,13 +39,19 @@ func _process(delta: float) -> void:
 
 
 func _on_target_destroyed(_pos: Vector3, target: Target) -> void:
+	var gained := 0
 	if target.team == Target.Team.ENEMY and target.points > 0:
-		score += target.points * combo
+		gained = target.points * combo
+		score += gained
 		combo = mini(combo + 1, max_combo)
 		combo_timer = combo_duration
 	else:
 		# Neutral / friendly: flat value (normally a penalty) and the combo breaks.
+		var before := score
 		score = maxi(score + target.points, 0)
+		gained = score - before
 		if target.points < 0:
 			combo = 1
+	if not (target is ObjectiveTarget):
+		side_points += gained
 	score_changed.emit(score, combo)

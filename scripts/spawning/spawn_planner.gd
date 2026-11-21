@@ -95,12 +95,22 @@ func _find_xz(rule: SpawnRule, origin: Vector2, anchor: Vector2, rng: RandomNumb
 		if _sampler.surface_slope_degrees_at(xz.x, xz.y) > rule.max_slope_degrees:
 			continue
 
+		if _in_exclusion(xz):
+			continue
+
 		if _too_close(xz, rule.min_spacing, existing):
 			continue
 
 		return xz
 
 	return Vector2.INF
+
+
+func _in_exclusion(xz: Vector2) -> bool:
+	for zone in _table.exclusions:
+		if Vector2(zone.x, zone.y).distance_to(xz) < zone.z:
+			return true
+	return false
 
 
 func _too_close(xz: Vector2, min_spacing: float, existing: Array[SpawnPoint]) -> bool:

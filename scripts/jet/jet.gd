@@ -1,7 +1,7 @@
 class_name Jet
 extends CharacterBody3D
 ## Player jet. A thin coordinator: it owns the components and ticks them in a fixed order
-## (flight -> trails -> camera -> lock-on -> weapons), exactly like the old monolithic script.
+## (flight -> trails -> camera -> lock-on -> weapons -> gun), exactly like the old monolithic script.
 
 signal health_changed(current: float, maximum: float)
 signal died
@@ -20,6 +20,8 @@ signal died
 @onready var camera_rig: JetCameraRig = $CameraRig
 @onready var touch_controls: JetTouchControls = get_node_or_null("TouchControls") as JetTouchControls
 
+## Machine gun. Found at $Gun if the scene has one, otherwise created in _ready().
+var gun: JetGun
 var is_dead: bool = false
 
 # --- Compatibility shims: other scripts may still read these off the jet. ---
@@ -37,9 +39,16 @@ var lock_progress: float:
 func _ready() -> void:
 	add_to_group("player")
 
+	gun = get_node_or_null("Gun") as JetGun
+	if gun == null:
+		gun = JetGun.new()
+		gun.name = "Gun"
+		add_child(gun)
+
 	flight.setup(self, mesh_pivot)
 	lock_on.setup(self)
 	weapons.setup(self, lock_on)
+	gun.setup(self)
 	trails.setup(mesh_pivot, flight)
 	camera_rig.setup(self, mesh_pivot, flight, controls)
 
@@ -48,6 +57,7 @@ func _ready() -> void:
 		touch_controls.setup(controls)
 
 	controls.fire_pressed.connect(weapons.request_fire)
+	controls.gun_pressed.connect(gun.request_fire)
 	controls.view_toggled.connect(camera_rig.toggle_view)
 
 	health.damaged.connect(_on_damaged)
@@ -65,6 +75,7 @@ func _physics_process(delta: float) -> void:
 	camera_rig.update(delta)
 	lock_on.update(delta)
 	weapons.update(delta)
+	gun.update(delta)
 
 
 ## Called by missiles / turrets. `amount < 0` uses JetHealth.default_damage.
@@ -84,6 +95,7 @@ func _on_died() -> void:
 	is_dead = true
 	velocity = Vector3.ZERO
 	controls.release_all()
+	gun.cease_fire()
 	lock_on.clear()
 	trails.clear()
 	mesh_pivot.hide()

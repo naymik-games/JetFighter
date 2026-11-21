@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="JetFighter"
-run/main_scene="uid://x64yqrf6cd53"
+run/main_scene="uid://7may2j3xy07u"
 config/features=PackedStringArray("4.7", "Mobile")
 config/icon="uid://bwsih6mkpjswf"
 

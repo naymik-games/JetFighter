@@ -5,7 +5,9 @@
 [ext_resource type="PackedScene" uid="uid://ciiah47bebw7e" path="res://scenes/tank.tscn" id="2_k0juu"]
 [ext_resource type="PackedScene" uid="uid://cxral7ge8h6m5" path="res://scenes/sam_turret.tscn" id="3_71j4m"]
 [ext_resource type="Script" uid="uid://cl62s6fftkwny" path="res://scripts/targeting_hud.gd" id="4_k0juu"]
+[ext_resource type="PackedScene" uid="uid://bwunmydppm3g4" path="res://scenes/explosion_burst.tscn" id="5_4mrxx"]
 [ext_resource type="Script" uid="uid://dmvhd12jacpu0" path="res://scripts/debug_overlay.gd" id="6_qfnet"]
+[ext_resource type="Script" uid="uid://vharh4th2vmu" path="res://scripts/missions/mission_runner.gd" id="7_i7141"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_rwgxs"]
 sky_top_color = Color(0.49945927, 0.5977526, 0.7605151, 1)
@@ -38,6 +40,11 @@ target_jet = NodePath("../jet")
 target_scene = ExtResource("2_k0juu")
 sam_turret_scene = ExtResource("3_71j4m")
 
+[node name="mission" type="Node" parent="." unique_id=1593815737]
+script = ExtResource("7_i7141")
+explosion_scene = ExtResource("5_4mrxx")
+auto_begin_delay = 4.0
+
 [node name="jet" parent="." unique_id=610851106 instance=ExtResource("2_4wyf3")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 20, 0)
 
@@ -46,4 +53,5 @@ script = ExtResource("4_k0juu")
 jet = NodePath("../jet")
 
 [node name="DebugOverlay" type="CanvasLayer" parent="." unique_id=832761742]
+visible = false
 script = ExtResource("6_qfnet")

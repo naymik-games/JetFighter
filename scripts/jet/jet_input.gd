@@ -6,14 +6,17 @@ extends Node
 ## hold the drag while another taps FIRE or holds BOOST / BRAKE.
 
 signal fire_pressed
+signal gun_pressed
 signal view_toggled
 signal buttons_changed
 
 const BTN_FIRE := &"fire"
 const BTN_BOOST := &"boost"
 const BTN_BRAKE := &"brake"
+const BTN_GUN := &"gun"
 const BTN_VIEW := &"view"
 const ACTION_VIEW := &"toggle_camera"
+const ACTION_GUN := &"fire_gun"
 
 const NO_POINTER := -999
 const MOUSE_POINTER := -100
@@ -42,12 +45,10 @@ var _held_counts: Dictionary = {}     # button id -> number of pointers holding 
 
 
 func _ready() -> void:
-	# Keyboard fallback for the camera toggle, so no Project Settings edit is needed.
-	if not InputMap.has_action(ACTION_VIEW):
-		InputMap.add_action(ACTION_VIEW)
-		var key := InputEventKey.new()
-		key.physical_keycode = KEY_C
-		InputMap.action_add_event(ACTION_VIEW, key)
+	# Keyboard fallbacks, so no Project Settings edit is needed. If you define these actions
+	# yourself in the Input Map, yours win and nothing is added.
+	_ensure_key_action(ACTION_VIEW, KEY_C)
+	_ensure_key_action(ACTION_GUN, KEY_G)
 
 
 func _input(event: InputEvent) -> void:
@@ -72,8 +73,19 @@ func _input(event: InputEvent) -> void:
 			_pointer_move(MOUSE_POINTER, event.position)
 	elif event.is_action_pressed(&"fire_missile") and not event.is_echo():
 		fire_pressed.emit()
+	elif event.is_action_pressed(ACTION_GUN) and not event.is_echo():
+		gun_pressed.emit()
 	elif event.is_action_pressed(ACTION_VIEW) and not event.is_echo():
 		view_toggled.emit()
+
+
+func _ensure_key_action(action: StringName, keycode: Key) -> void:
+	if InputMap.has_action(action):
+		return
+	InputMap.add_action(action)
+	var key := InputEventKey.new()
+	key.physical_keycode = keycode
+	InputMap.action_add_event(action, key)
 
 
 func _notification(what: int) -> void:
@@ -133,6 +145,8 @@ func _press_button(id: StringName) -> void:
 	_held_counts[id] = int(_held_counts.get(id, 0)) + 1
 	if id == BTN_FIRE:
 		fire_pressed.emit()
+	elif id == BTN_GUN:
+		gun_pressed.emit()
 	elif id == BTN_VIEW:
 		view_toggled.emit()
 	buttons_changed.emit()

@@ -8,6 +8,9 @@ extends Resource
 ## Spawns stay this far inside the chunk edge so they never straddle two chunks.
 @export var edge_margin: float = 20.0
 @export var max_spawns_per_chunk: int = 8
+## Circles (x, z, radius) where nothing random may spawn. The Terrain node fills this with the
+## mission's objective sites at start. Runtime only: it is not saved with the table.
+var exclusions: Array[Vector3] = []
 
 
 ## Builds the default table from the two scenes already assigned on the Terrain node.

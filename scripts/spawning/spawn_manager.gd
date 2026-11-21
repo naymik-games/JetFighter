@@ -87,6 +87,8 @@ func _spawn(job: Dictionary) -> void:
 	instance.transform = Transform3D(orientation, point.position - world_origin)
 	instance.set_meta("spawn_id", point.id)
 	parent.add_child(instance)
+	if point.rule.network_id != &"":
+		NetworkMember.attach(instance, point.rule.network_id)
 
 	_live_count += 1
 	# Fires both when destroyed and when the chunk unloads, so the live count stays correct

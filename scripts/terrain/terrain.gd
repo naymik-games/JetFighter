@@ -12,6 +12,9 @@ extends Node3D
 @export_group("Config")
 ## Leave empty to use TerrainConfig defaults.
 @export var config: TerrainConfig
+## When a mission is selected (MissionSession), use its seed as the world seed so the terrain and
+## the mission's objective layout always match. Turn off for a world that ignores missions.
+@export var use_mission_seed: bool = true
 
 @export_group("Spawning")
 ## Leave empty to build a default table from target_scene and sam_turret_scene.
@@ -26,6 +29,11 @@ extends Node3D
 @export var print_terrain_summary: bool = true
 ## The jet's cruise altitude, used only for the "land above" stat.
 @export var summary_reference_altitude: float = 50.0
+
+## A chunk finished building and is now in the scene (its children can be added).
+signal chunk_ready(coord: Vector2i, chunk: Node3D)
+## A chunk is about to be freed (its children go with it).
+signal chunk_unloaded(coord: Vector2i)
 
 # Face kinds baked into CUSTOM0.a for the terrain shader (see TerrainMaterial).
 const KIND_PLAIN := 0.0
@@ -56,6 +64,14 @@ func _ready() -> void:
 
 	if config == null:
 		config = TerrainConfig.new()
+	var mission: MissionConfig = null
+	if use_mission_seed:
+		mission = MissionSession.get_current()
+		if mission != null:
+			# Work on a copy so the saved .tres is not changed by playing a mission.
+			config = config.duplicate() as TerrainConfig
+			config.world_seed = mission.seed_value
+			print("Terrain seed taken from mission '", mission.id, "'")
 	sampler = TerrainSampler.new(config)
 	print("Terrain seed: ", sampler.seed_value)
 	if print_terrain_summary:
@@ -63,6 +79,8 @@ func _ready() -> void:
 
 	if spawn_table == null:
 		spawn_table = SpawnTable.make_default(target_scene, sam_turret_scene)
+	if mission != null:
+		_apply_mission_to_spawning(mission)
 	planner = SpawnPlanner.new(spawn_table, sampler)
 
 	shared_material = TerrainMaterial.create(config)
@@ -95,6 +113,35 @@ func _process(delta: float) -> void:
 		_update_chunks(current_chunk)
 
 
+## Mission rules for the random spawns. Runs before any chunk is planned.
+func _apply_mission_to_spawning(mission: MissionConfig) -> void:
+	DefenseNetworks.reset()
+	# Open-world spawns join the mission's networks (always assigned, so nothing stale is kept).
+	for rule in spawn_table.rules:
+		if rule != null:
+			rule.network_id = StringName(mission.world_networks.get(rule.rule_name, &""))
+	# Keep random tanks and SAMs off the objective sites.
+	var zones: Array[Vector3] = []
+	for placement in MissionSession.chain_for(mission, sampler):
+		zones.append(Vector3(placement.position.x, placement.position.z, ObjectiveDefenses.EXCLUSION_RADIUS))
+	spawn_table.exclusions = zones
+
+
+## Which chunk a world position falls in.
+func chunk_coord_at(world_pos: Vector3) -> Vector2i:
+	return _world_to_chunk(world_pos)
+
+
+## World position of a chunk's corner (its node sits here).
+func chunk_origin(coord: Vector2i) -> Vector3:
+	return Vector3(coord.x * config.chunk_size, 0.0, coord.y * config.chunk_size)
+
+
+## The chunk node for a coordinate, or null when that chunk is not built (yet).
+func get_chunk(coord: Vector2i) -> Node3D:
+	return active_chunks.get(coord) as Node3D
+
+
 func _world_to_chunk(world_pos: Vector3) -> Vector2i:
 	return Vector2i(
 		floori(world_pos.x / config.chunk_size),
@@ -124,6 +171,7 @@ func _update_chunks(center_chunk: Vector2i) -> void:
 
 	for coord in coords_to_remove:
 		var chunk_node: Node3D = active_chunks[coord]
+		chunk_unloaded.emit(coord)
 		chunk_node.queue_free()
 		active_chunks.erase(coord)
 
@@ -221,6 +269,9 @@ func _finalize_chunk_on_main(coord: Vector2i, array_mesh: ArrayMesh, collision_s
 	var world_origin := Vector3(coord.x * config.chunk_size, 0.0, coord.y * config.chunk_size)
 
 	var mesh_instance := MeshInstance3D.new()
+	# The Terrain node may keep streaming while the game is paused (briefing and result screens),
+	# but everything that lives on a chunk (targets, turrets) must freeze with the rest of the world.
+	mesh_instance.process_mode = Node.PROCESS_MODE_PAUSABLE
 	mesh_instance.mesh = array_mesh
 	mesh_instance.material_override = shared_material
 	mesh_instance.position = world_origin
@@ -237,6 +288,7 @@ func _finalize_chunk_on_main(coord: Vector2i, array_mesh: ArrayMesh, collision_s
 	spawn_manager.queue_plan(mesh_instance, world_origin, spawn_plan)
 
 	active_chunks[coord] = mesh_instance
+	chunk_ready.emit(coord, mesh_instance)
 
 	last_finalize_ms = (Time.get_ticks_usec() - t_start) / 1000.0
 	peak_finalize_ms = maxf(peak_finalize_ms, last_finalize_ms)

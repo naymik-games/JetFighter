@@ -97,6 +97,9 @@ func _update_offscreen_arrows(cam: Camera3D) -> void:
 		return
 		
 	for tgt in TargetRegistry.query(jet.global_position, arrow_range, TargetRegistry.MASK_ENEMY):
+		# Mission objectives get their own, larger pointer from MissionHud.
+		if tgt is ObjectiveTarget:
+			continue
 		var screen_pos := cam.unproject_position(tgt.global_position)
 		var is_behind := cam.is_position_behind(tgt.global_position)
 		

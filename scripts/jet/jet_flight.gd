@@ -4,9 +4,9 @@ extends Node
 ## vector from JetInput.
 
 @export_group("Throttle")
-@export var cruise_speed: float = 35.0
-@export var boost_speed: float = 65.0
-@export var brake_speed: float = 18.0
+@export var cruise_speed: float = 25.0
+@export var boost_speed: float = 45.0
+@export var brake_speed: float = 12.0
 @export var throttle_accel: float = 4.5
 
 @export_group("Steering")

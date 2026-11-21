@@ -34,3 +34,9 @@ extends Resource
 ## Tilt the entity to match the ground surface.
 @export var align_to_surface: bool = false
 @export var ground_offset: float = 0.0
+
+@export_group("Defense network")
+## Entities from this rule join this defense network (e.g. &"net_a"), so a mission can switch the
+## whole network off. The Terrain node sets this from the mission's world_networks at start
+## (an empty value there clears it), so leave it empty here.
+@export var network_id: StringName = &""

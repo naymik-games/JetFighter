@@ -1,0 +1,15 @@
+[gd_scene format=3 uid="uid://7may2j3xy07u"]
+
+[ext_resource type="Script" uid="uid://b1x4xpitfarbn" path="res://scripts/mission_select.gd" id="1_okr8s"]
+[ext_resource type="PackedScene" uid="uid://x64yqrf6cd53" path="res://scenes/world.tscn" id="2_4cq7j"]
+
+[node name="MissionSelect" type="Control" unique_id=294977753]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_okr8s")
+game_scene = ExtResource("2_4cq7j")
+debug_unlock_all = true
