@@ -4,12 +4,12 @@ extends Node
 ## JetWeapons (missiles) and JetLockOn: the gun never reads the missile lock.
 ## Fire requests arrive from JetInput (keyboard or touch) via request_fire().
 ##
-## Build steps covered here: 1 (config + burst/heat/overheat state) and 2 (hitscan with
-## target damage and ground hits). Tracers, aim assist and the HUD hook into the signals
-## and the aim seam below.
+## Build steps covered here: 1 (config + burst/heat/overheat state), 2 (hitscan with target
+## damage and ground hits), 3 (tracers + impact flashes, see JetGunTracers) and 4 (aim assist).
+## The reticle and heat ring live in JetGunReticle; the touch button lives in JetTouchControls.
 
 ## Emitted once per round. `end_point` is where the shot stopped (impact, or max range).
-## Tracers and impact effects (step 3) listen to this.
+## Tracers and impact effects listen to this.
 signal shot_fired(origin: Vector3, end_point: Vector3, hit_kind: int)
 signal burst_started
 signal burst_ended(shots: int)
@@ -23,11 +23,32 @@ enum HitKind { NONE, GROUND, TARGET }
 ## Local to the jet: where rounds leave from.
 @export var muzzle_offset: Vector3 = Vector3(0.0, -0.2, -1.5)
 
+@export_group("Aim Assist")
+@export var assist_enabled: bool = true
+## Targets farther than this (from the muzzle) are never assisted.
+@export var assist_range: float = 180.0
+## Half-angle around the nose. Generous on purpose; dial it down once it feels too sticky.
+@export var assist_cone_degrees: float = 14.0
+## 0 = no pull, 1 = rounds fly straight at the target once the blend settles.
+@export_range(0.0, 1.0) var assist_strength: float = 1.0
+## How fast the aim glides onto (and off) a target. Higher = snappier.
+@export var assist_snap_speed: float = 12.0
+## The current assist target is kept until it leaves cone * this factor.
+@export var assist_hold_factor: float = 1.35
+## A new candidate must be this many degrees closer to the nose to steal the assist.
+@export var assist_switch_degrees: float = 3.0
+@export_flags("Enemy", "Neutral", "Friendly") var assist_teams: int = 1
+
+@export_group("Effects")
+## Creates the tracer and reticle nodes ($Tracers, $Reticle) if the scene doesn't have them.
+@export var auto_create_effects: bool = true
+
 @export_group("Debug")
 ## Burst summaries, overheat changes and kills.
 @export var debug_log: bool = true
-## A short-lived sphere at each impact: red = target, yellow = ground.
-@export var debug_markers: bool = true
+## A short-lived sphere at each impact: red = target, yellow = ground. Off now that tracers
+## and impact flashes show the same thing.
+@export var debug_markers: bool = false
 
 ## 0..1. Reaching 1.0 overheats the gun.
 var heat: float = 0.0
@@ -35,6 +56,8 @@ var is_bursting: bool = false
 var is_overheated: bool = false
 ## Direction the next round will fly. Refreshed every tick so the HUD can read it.
 var aim_direction: Vector3 = Vector3.FORWARD
+## The target the aim is currently pulled toward, or null.
+var assist_target: Target = null
 
 var _body: CharacterBody3D
 var _fire_requested: bool = false
@@ -42,6 +65,11 @@ var _burst_left: float = 0.0
 var _cooldown_left: float = 0.0
 var _shot_accum: float = 0.0
 var _since_last_shot: float = 999.0
+
+# Aim assist state. The blend eases between the jet nose (0) and the target direction (1), so
+# with no target the aim is exactly the nose with no lag.
+var _assist_blend: float = 0.0
+var _assist_desired: Vector3 = Vector3.FORWARD
 
 # Per-burst stats for the debug summary.
 var _burst_shots: int = 0
@@ -57,7 +85,9 @@ func setup(body: CharacterBody3D) -> void:
 	_body = body
 	if config == null:
 		config = GunConfig.new()
-	aim_direction = _compute_aim_direction()
+	aim_direction = _nose_direction()
+	_assist_desired = aim_direction
+	_ensure_effects()
 
 
 func request_fire() -> void:
@@ -76,14 +106,18 @@ func get_muzzle_position() -> Vector3:
 	return _body.global_transform * muzzle_offset
 
 
-## A point `distance` ahead of the muzzle along the aim direction. The HUD will project this
-## to draw the gun reticle (in chase view the screen centre is not where the nose points).
+## A point `distance` ahead of the muzzle along the aim direction.
 func get_aim_point(distance: float) -> Vector3:
 	return get_muzzle_position() + aim_direction * distance
 
 
+## True while the aim is being pulled toward a target.
+func is_assisting() -> bool:
+	return is_instance_valid(assist_target)
+
+
 func update(delta: float) -> void:
-	aim_direction = _compute_aim_direction()
+	aim_direction = _compute_aim_direction(delta)
 
 	var requested := _fire_requested
 	_fire_requested = false
@@ -98,10 +132,92 @@ func update(delta: float) -> void:
 	_tick_heat(delta)
 
 
-## The aim seam. Plain jet nose for now; build step 4 (reticle snapping toward a candidate
-## target) replaces the body of this and nothing else has to change.
-func _compute_aim_direction() -> Vector3:
-	return -_body.global_transform.basis.z
+func _ensure_effects() -> void:
+	var tracers := get_node_or_null("Tracers") as JetGunTracers
+	if tracers == null and auto_create_effects:
+		tracers = JetGunTracers.new()
+		tracers.name = "Tracers"
+		add_child(tracers)
+	if tracers != null:
+		tracers.setup(self)
+
+	var reticle := get_node_or_null("Reticle") as JetGunReticle
+	if reticle == null and auto_create_effects:
+		reticle = JetGunReticle.new()
+		reticle.name = "Reticle"
+		add_child(reticle)
+	if reticle != null:
+		reticle.setup(self)
+
+
+func _nose_direction() -> Vector3:
+	return (-_body.global_transform.basis.z).normalized()
+
+
+## The aim seam. Nose direction, pulled toward the assist target when there is one.
+func _compute_aim_direction(delta: float) -> Vector3:
+	var nose := _nose_direction()
+	if not assist_enabled:
+		assist_target = null
+		_assist_blend = 0.0
+		return nose
+
+	_update_assist_target(nose)
+
+	var goal := 0.0
+	if is_instance_valid(assist_target):
+		goal = assist_strength
+		# Kept after the target is lost so the aim eases back to the nose instead of jumping.
+		_assist_desired = (assist_target.get_aim_position() - get_muzzle_position()).normalized()
+
+	_assist_blend = lerpf(_assist_blend, goal, 1.0 - exp(-assist_snap_speed * delta))
+	if _assist_blend < 0.002:
+		_assist_blend = 0.0
+		return nose
+	return nose.slerp(_assist_desired, _assist_blend).normalized()
+
+
+func _update_assist_target(nose: Vector3) -> void:
+	if not is_instance_valid(assist_target):
+		assist_target = null
+
+	var origin := get_muzzle_position()
+	var cone := deg_to_rad(assist_cone_degrees)
+	var best := TargetRegistry.best_in_cone(
+		origin, nose, assist_range, cone, assist_teams, _assist_can_see) as Target
+
+	var chosen: Target = best
+	if assist_target != null and _assist_still_valid(assist_target, origin, nose, cone * assist_hold_factor):
+		chosen = assist_target
+		if best != null and best != assist_target \
+				and _angle_to(best, origin, nose) + deg_to_rad(assist_switch_degrees) < _angle_to(assist_target, origin, nose):
+			chosen = best
+	assist_target = chosen
+
+
+func _angle_to(t: Target, origin: Vector3, nose: Vector3) -> float:
+	return nose.angle_to((t.get_aim_position() - origin).normalized())
+
+
+func _assist_still_valid(t: Target, origin: Vector3, nose: Vector3, max_angle: float) -> bool:
+	if t.is_dead():
+		return false
+	if (Target.team_bit(t.team) & assist_teams) == 0:
+		return false
+	if origin.distance_to(t.get_aim_position()) > assist_range * 1.1:
+		return false
+	if _angle_to(t, origin, nose) > max_angle:
+		return false
+	return _assist_can_see(t)
+
+
+## True if no terrain sits between the muzzle and the target.
+func _assist_can_see(t: Target) -> bool:
+	var q := PhysicsRayQueryParameters3D.create(
+		get_muzzle_position(), t.get_aim_position(), GameConst.LAYER_TERRAIN)
+	q.exclude = [_body.get_rid()] # the jet shares layer 1 with terrain for now
+	q.collide_with_areas = false
+	return _body.get_world_3d().direct_space_state.intersect_ray(q).is_empty()
 
 
 func _handle_press() -> void:

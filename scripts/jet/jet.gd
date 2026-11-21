@@ -54,7 +54,7 @@ func _ready() -> void:
 
 	if touch_controls != null:
 		controls.button_hit_test = touch_controls.button_at
-		touch_controls.setup(controls)
+		touch_controls.setup(controls, gun)
 
 	controls.fire_pressed.connect(weapons.request_fire)
 	controls.gun_pressed.connect(gun.request_fire)
